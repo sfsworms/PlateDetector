@@ -342,17 +342,31 @@ main {
     background: #dcfce7;
     color: #166534;
     font-weight: 700;
-    cursor: default;
+    cursor: pointer;
 }
 
 #plate-map td.no-colony {
     background: #f9fafb;
     color: #d1d5db;
+    cursor: pointer;
 }
 
 #plate-map td.normal-colony {
     background: #fff;
     color: #9ca3af;
+    cursor: pointer;
+}
+
+#plate-map td.halo-well:hover {
+    background: #bbf7d0;
+}
+
+#plate-map td.no-colony:hover {
+    background: #f0f2f5;
+}
+
+#plate-map td.normal-colony:hover {
+    background: #f0f7ff;
 }
 
 /* Results table */

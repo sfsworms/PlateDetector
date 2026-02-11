@@ -165,7 +165,8 @@
 
             if (hasHalo) {
                 // Draw green circle sized to the gentle blob (actual halo extent)
-                const drawR = gentleRadius || haloRadius;
+                // For manual overrides without a gentle blob, use colonyRadius * 2
+                const drawR = gentleRadius || haloRadius || colonyRadius * 2;
                 ctx.beginPath();
                 ctx.arc(cx, cy, drawR, 0, Math.PI * 2);
                 ctx.strokeStyle = '#22c55e';
@@ -225,14 +226,12 @@
         }
     }
 
-    // --- Results table and plate map ---
-    function buildResults(result, orientation) {
-        const { wells } = result;
+    // --- Statistics update ---
+    function updateStats(wells) {
         const haloWells = wells.filter(w => w.hasHalo);
         const colonyWells = wells.filter(w => w.hasColony);
         const noHaloWells = colonyWells.filter(w => !w.hasHalo);
 
-        // Statistics
         const totalColonies = colonyWells.length;
         const haloCount = haloWells.length;
         const noHaloCount = noHaloWells.length;
@@ -244,7 +243,11 @@
         document.getElementById('stat-pct').textContent = haloPct.toFixed(1) + '%';
 
         wellCount.textContent = haloWells.length;
+    }
 
+    // --- Well list update ---
+    function updateWellList(wells) {
+        const haloWells = wells.filter(w => w.hasHalo);
         haloWells.sort((a, b) => a.wellName.localeCompare(b.wellName, undefined, { numeric: true }));
 
         resultsBody.innerHTML = '';
@@ -254,10 +257,57 @@
                 <td><strong>${w.wellName}</strong></td>
                 <td>${w.rowLabel}</td>
                 <td>${w.colNum}</td>
-                <td>${w.profileScore ?? w.haloScore}</td>
+                <td>${w.manualOverride ? 'manual' : (w.profileScore ?? w.haloScore)}</td>
             `;
             resultsBody.appendChild(tr);
         }
+    }
+
+    // --- Apply cell appearance based on well state ---
+    function applyCellState(td, well) {
+        if (well.hasHalo) {
+            td.className = 'halo-well';
+            td.textContent = '\u2713';
+            td.title = `${well.wellName} - ${well.manualOverride ? 'Manual' : 'Size ratio: ' + well.sizeRatio}`;
+        } else if (well.hasColony) {
+            td.className = 'normal-colony';
+            td.textContent = '\u25CB';
+            td.title = `${well.wellName} - Colony${well.manualOverride ? ' (manual)' : ' (ratio: ' + well.sizeRatio + ')'}`;
+        } else {
+            td.className = 'no-colony';
+            td.textContent = '\u00B7';
+            td.title = `${well.wellName} - Empty`;
+        }
+    }
+
+    // --- Cycle well state on click ---
+    function cycleWellState(well, td) {
+        if (!well.hasColony && !well.hasHalo) {
+            // no-colony → colony
+            well.hasColony = true;
+            well.hasHalo = false;
+        } else if (well.hasColony && !well.hasHalo) {
+            // colony → halo
+            well.hasHalo = true;
+        } else {
+            // halo → no-colony
+            well.hasColony = false;
+            well.hasHalo = false;
+        }
+        well.manualOverride = true;
+
+        applyCellState(td, well);
+        updateStats(lastResult.wells);
+        updateWellList(lastResult.wells);
+        drawAnnotated(currentImage, lastResult);
+    }
+
+    // --- Results table and plate map ---
+    function buildResults(result, orientation) {
+        const { wells } = result;
+
+        updateStats(wells);
+        updateWellList(wells);
 
         const numRows = 8;
         const numCols = 12;
@@ -283,19 +333,8 @@
                 const well = wells.find(w => w.row === r && w.col === c);
                 const td = document.createElement('td');
                 if (well) {
-                    if (well.hasHalo) {
-                        td.className = 'halo-well';
-                        td.textContent = '\u2713';
-                        td.title = `${well.wellName} - Size ratio: ${well.sizeRatio}`;
-                    } else if (well.hasColony) {
-                        td.className = 'normal-colony';
-                        td.textContent = '\u25CB';
-                        td.title = `${well.wellName} - Colony (ratio: ${well.sizeRatio})`;
-                    } else {
-                        td.className = 'no-colony';
-                        td.textContent = '\u00B7';
-                        td.title = `${well.wellName} - Empty`;
-                    }
+                    applyCellState(td, well);
+                    td.addEventListener('click', () => cycleWellState(well, td));
                 }
                 tr.appendChild(td);
             }
