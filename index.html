@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Plate Halo Detector</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <h1>Plate Halo Detector</h1>
+        <p class="subtitle">Upload an omnitray plate image to detect colonies with enzyme halos</p>
+    </header>
+
+    <main>
+        <section id="upload-section">
+            <div id="drop-zone">
+                <div class="drop-zone-content">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="17 8 12 3 7 8"/>
+                        <line x1="12" y1="3" x2="12" y2="15"/>
+                    </svg>
+                    <p>Drag &amp; drop a plate image here</p>
+                    <p class="small">or click to browse</p>
+                </div>
+                <input type="file" id="file-input" accept="image/*" hidden>
+            </div>
+        </section>
+
+        <section id="controls-section" class="hidden">
+            <h2>Detection Settings</h2>
+            <div class="controls-grid">
+                <div class="control-group">
+                    <label for="sensitivity">Halo Sensitivity</label>
+                    <input type="range" id="sensitivity" min="1" max="30" value="10" step="1">
+                    <span id="sensitivity-val">10</span>
+                </div>
+                <div class="control-group">
+                    <label for="min-halo-size">Min Halo Size</label>
+                    <input type="range" id="min-halo-size" min="1" max="30" value="5" step="1">
+                    <span id="min-halo-size-val">5</span>
+                </div>
+                <div class="control-group">
+                    <label for="plate-orientation">Plate Orientation</label>
+                    <select id="plate-orientation">
+                        <option value="landscape">Landscape (12 cols x 8 rows)</option>
+                        <option value="portrait">Portrait (8 cols x 12 rows)</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="debug-toggle">
+                        Show debug overlay
+                    </label>
+                </div>
+                <div class="control-group">
+                    <button id="detect-btn" class="btn-primary">Detect Halos</button>
+                </div>
+            </div>
+        </section>
+
+        <section id="results-section" class="hidden">
+            <div class="results-layout">
+                <div class="result-panel">
+                    <h2>Annotated Plate</h2>
+                    <div id="canvas-container">
+                        <canvas id="result-canvas"></canvas>
+                    </div>
+                    <div class="legend">
+                        <span class="legend-item"><span class="legend-circle halo"></span> Colony with halo</span>
+                        <span class="legend-item"><span class="legend-circle no-halo"></span> Colony without halo</span>
+                    </div>
+                    <button id="download-btn" class="btn-secondary">Download Annotated Image</button>
+                </div>
+                <div class="result-panel">
+                    <h2>Active Wells <span id="well-count" class="badge">0</span></h2>
+                    <div id="plate-map-container">
+                        <table id="plate-map"></table>
+                    </div>
+                    <h3>Well List</h3>
+                    <div id="table-container">
+                        <table id="results-table">
+                            <thead>
+                                <tr>
+                                    <th>Well</th>
+                                    <th>Row</th>
+                                    <th>Column</th>
+                                    <th>Size Ratio</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                    <button id="copy-btn" class="btn-secondary">Copy Well List to Clipboard</button>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <canvas id="work-canvas" hidden></canvas>
+
+    <script src="detector.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
