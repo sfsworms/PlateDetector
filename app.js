@@ -9,10 +9,8 @@
     const downloadBtn = document.getElementById('download-btn');
     const copyBtn = document.getElementById('copy-btn');
     const sensitivityInput = document.getElementById('sensitivity');
-    const minHaloInput = document.getElementById('min-halo-size');
     const orientationInput = document.getElementById('plate-orientation');
     const sensitivityVal = document.getElementById('sensitivity-val');
-    const minHaloSizeVal = document.getElementById('min-halo-size-val');
     const wellCount = document.getElementById('well-count');
     const plateMap = document.getElementById('plate-map');
     const resultsBody = document.querySelector('#results-table tbody');
@@ -63,9 +61,6 @@
     sensitivityInput.addEventListener('input', () => {
         sensitivityVal.textContent = sensitivityInput.value;
     });
-    minHaloInput.addEventListener('input', () => {
-        minHaloSizeVal.textContent = minHaloInput.value;
-    });
     detectBtn.addEventListener('click', runDetection);
 
     const debugToggle = document.getElementById('debug-toggle');
@@ -108,7 +103,6 @@
 
         const options = {
             sensitivity: parseInt(sensitivityInput.value),
-            minHaloSize: parseInt(minHaloInput.value),
             orientation: orientationInput.value
         };
         const result = HaloDetector.detect(imageData, options);
