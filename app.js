@@ -84,6 +84,9 @@
             setTimeout(() => {
                 try {
                     doDetection();
+                } catch (err) {
+                    console.error('Detection error:', err);
+                    alert('Detection failed: ' + err.message);
                 } finally {
                     detectBtn.textContent = 'Detect Halos';
                     detectBtn.disabled = false;
