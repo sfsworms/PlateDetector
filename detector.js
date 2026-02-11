@@ -475,8 +475,29 @@ const HaloDetector = (() => {
     }
 
     // ============================================================
-    //  Halo detection
+    //  Halo detection — radial intensity profile approach
     // ============================================================
+
+    /**
+     * Sample average intensity in a ring around (cx, cy).
+     */
+    function ringMean(gray, w, h, cx, cy, innerR, outerR) {
+        let sum = 0, count = 0;
+        const x0 = Math.max(0, Math.floor(cx - outerR));
+        const x1 = Math.min(w - 1, Math.ceil(cx + outerR));
+        const y0 = Math.max(0, Math.floor(cy - outerR));
+        const y1 = Math.min(h - 1, Math.ceil(cy + outerR));
+        for (let y = y0; y <= y1; y++) {
+            for (let x = x0; x <= x1; x++) {
+                const d = Math.hypot(x - cx, y - cy);
+                if (d >= innerR && d <= outerR) {
+                    sum += gray[y * w + x];
+                    count++;
+                }
+            }
+        }
+        return count > 0 ? sum / count : 0;
+    }
 
     function analyzeHalos(blurred, w, h, gridResult, strictBlobs, gentleBlobs, options) {
         const { sensitivity = 10 } = options;
@@ -484,6 +505,7 @@ const HaloDetector = (() => {
 
         const cellSize = Math.min(Math.abs(hSpacing), Math.abs(vSpacing));
         const matchRadius = cellSize * 0.45;
+        const colonyR = medianColonyRadius;
 
         function findNearestBlob(blobList, cx, cy, maxDist) {
             let best = null, bestD = maxDist;
@@ -495,21 +517,83 @@ const HaloDetector = (() => {
         }
 
         const medianStrictR = median(strictBlobs.map(b => b.radius));
-        const ratioThreshold = 1.0 + (31 - sensitivity) * 0.04;
         const rowLabels = 'ABCDEFGH'.split('');
-        const results = [];
+
+        // First pass: compute radial profile score for every colony
+        const wellData = [];
 
         for (const well of wells) {
             const { cx, cy, gridRow, gridCol } = well;
             if (cx < 0 || cx >= w || cy < 0 || cy >= h) continue;
 
             const strictMatch = findNearestBlob(strictBlobs, cx, cy, matchRadius);
-            const gentleMatch = findNearestBlob(gentleBlobs, cx, cy, matchRadius);
-
             const hasColony = strictMatch !== null;
+
+            let profileScore = 0;
+            let peakBrightness = 0;
+            let bgBrightness = 0;
+
+            if (hasColony) {
+                // Sample radial intensity profile in concentric rings
+                // from colony edge out to cell boundary
+                const nRings = 10;
+                const startR = colonyR * 1.1;
+                const endR = cellSize * 0.48;
+                const ringValues = [];
+
+                for (let i = 0; i < nRings; i++) {
+                    const r0 = startR + (endR - startR) * (i / nRings);
+                    const r1 = startR + (endR - startR) * ((i + 1) / nRings);
+                    ringValues.push(ringMean(blurred, w, h, cx, cy, r0, r1));
+                }
+
+                // Colony center brightness
+                const colonyBright = ringMean(blurred, w, h, cx, cy, 0, colonyR * 0.8);
+
+                // Background = outermost 3 rings average
+                bgBrightness = (ringValues[nRings - 1] + ringValues[nRings - 2] + ringValues[nRings - 3]) / 3;
+
+                // Peak brightness in the halo zone (inner half of rings)
+                const haloRings = ringValues.slice(0, Math.ceil(nRings * 0.6));
+                peakBrightness = Math.max(...haloRings);
+
+                // Halo score = how much brighter the peak halo ring is vs background
+                // A colony with a halo has: dark center, BRIGHT halo ring, then dimmer background
+                // A colony without a halo has: dark center, then gradually reaches background
+                profileScore = peakBrightness - bgBrightness;
+            }
+
+            // Also compute the gentle blob size ratio as before
+            const gentleMatch = findNearestBlob(gentleBlobs, cx, cy, matchRadius);
             const gentleR = gentleMatch ? gentleMatch.radius : 0;
             const sizeRatio = hasColony && medianStrictR > 0 ? gentleR / medianStrictR : 0;
-            const hasHalo = hasColony && sizeRatio > ratioThreshold;
+
+            wellData.push({
+                well, gridRow, gridCol, cx, cy,
+                hasColony, strictMatch, gentleR,
+                sizeRatio, profileScore, peakBrightness, bgBrightness
+            });
+        }
+
+        // Compute threshold from profile scores of all colonies
+        // The idea: colonies without halos have profileScore near 0 or slightly negative
+        // Colonies with halos have a clear positive profileScore
+        const colonyScores = wellData.filter(d => d.hasColony).map(d => d.profileScore);
+        colonyScores.sort((a, b) => a - b);
+
+        // Use sensitivity to set the threshold
+        // At sensitivity=10 (default): threshold at roughly the 60th percentile
+        // Higher sensitivity = lower threshold = more detections
+        const percentile = Math.max(0.1, Math.min(0.9, 1.0 - sensitivity / 30));
+        const autoThreshold = colonyScores[Math.floor(colonyScores.length * percentile)] || 2;
+        // Clamp to a minimum of 1.5 to avoid noise
+        const profileThreshold = Math.max(1.5, autoThreshold);
+
+        const results = [];
+        for (const wd of wellData) {
+            const { well, gridRow, gridCol, cx, cy, hasColony, gentleR, sizeRatio, profileScore } = wd;
+
+            const hasHalo = hasColony && profileScore > profileThreshold;
 
             results.push({
                 row: gridRow, col: gridCol,
@@ -517,14 +601,21 @@ const HaloDetector = (() => {
                 wellName: `${rowLabels[gridRow] || '?'}${gridCol + 1}`,
                 rowLabel: rowLabels[gridRow] || '?', colNum: gridCol + 1,
                 hasColony, hasHalo,
-                haloScore: hasColony ? Math.round(sizeRatio * 10) / 10 : 0,
+                haloScore: hasColony ? Math.round(profileScore * 10) / 10 : 0,
                 gentleRadius: Math.round(gentleR),
-                strictRadius: strictMatch ? Math.round(strictMatch.radius) : 0,
-                sizeRatio: Math.round(sizeRatio * 100) / 100
+                strictRadius: wd.strictMatch ? Math.round(wd.strictMatch.radius) : 0,
+                sizeRatio: Math.round(sizeRatio * 100) / 100,
+                profileScore: Math.round(profileScore * 10) / 10
             });
         }
 
-        return { wells: results, colonyRadius: Math.round(medianStrictR), haloRadius: Math.round(cellSize * 0.45), medianStrictR, ratioThreshold };
+        return {
+            wells: results,
+            colonyRadius: Math.round(medianStrictR),
+            haloRadius: Math.round(cellSize * 0.45),
+            medianStrictR,
+            profileThreshold: Math.round(profileThreshold * 10) / 10
+        };
     }
 
     // ============================================================
