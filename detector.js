@@ -1,15 +1,18 @@
 /**
- * Plate Halo Detector v4
+ * Plate Halo Detector v5
  *
- * Uses RANSAC-affine grid fitting:
- * 1. Find colony blobs at strict & gentle thresholds
- * 2. Estimate grid spacing from nearest-neighbour distances
- * 3. Use Hough-style vector voting to find the two grid basis vectors
- * 4. RANSAC: pick blob triplets, hypothesize grid labels from basis vectors,
+ * Uses RANSAC-affine grid fitting + combined blob size ratio halo detection:
+ * 1. Find colony blobs at strict threshold (colony centers)
+ * 2. Find "gentle" blobs at adaptive + global thresholds (colony+halo extent)
+ * 3. Estimate grid spacing from nearest-neighbour distances
+ * 4. Use Hough-style vector voting to find the two grid basis vectors
+ * 5. RANSAC: pick blob triplets, hypothesize grid labels from basis vectors,
  *    solve affine transform, count inliers — keep the best
- * 5. Refine with least-squares on all inliers
- * 6. Generate all 96 well positions from the refined affine
- * 7. Halo detection by comparing gentle vs strict blob sizes
+ * 6. Refine with least-squares on all inliers
+ * 7. Generate all 96 well positions from the refined affine
+ * 8. Halo detection: compare gentle blob radius vs strict colony radius.
+ *    Uses max(adaptive, global) to handle edge wells where adaptive fails.
+ *    A ratio > ~1.2 indicates a halo (clearing zone makes the blob larger).
  */
 
 const HaloDetector = (() => {
@@ -135,8 +138,37 @@ const HaloDetector = (() => {
         const binaryStrict = new Uint8Array(w * h);
         for (let i = 0; i < w * h; i++) binaryStrict[i] = (mean[i] - blurred[i]) > 12 ? 1 : 0;
 
+        // Adaptive gentle threshold (works well for interior wells)
         const binaryGentle = new Uint8Array(w * h);
         for (let i = 0; i < w * h; i++) binaryGentle[i] = (mean[i] - blurred[i]) > 3 ? 1 : 0;
+
+        // Global percentile-based threshold (works well for edge wells)
+        // Find the 40th percentile brightness value using a histogram
+        // (much faster than sorting the full array)
+        const nBuckets = 256;
+        const hist = new Uint32Array(nBuckets);
+        let gMin = Infinity, gMax = -Infinity;
+        for (let i = 0; i < w * h; i++) {
+            if (blurred[i] < gMin) gMin = blurred[i];
+            if (blurred[i] > gMax) gMax = blurred[i];
+        }
+        const gRange = gMax - gMin || 1;
+        for (let i = 0; i < w * h; i++) {
+            const bucket = Math.min(nBuckets - 1, Math.floor((blurred[i] - gMin) / gRange * nBuckets));
+            hist[bucket]++;
+        }
+        const targetCount = Math.floor(w * h * 0.40);
+        let cumCount = 0;
+        let globalThresh = gMin;
+        for (let b = 0; b < nBuckets; b++) {
+            cumCount += hist[b];
+            if (cumCount >= targetCount) {
+                globalThresh = gMin + (b + 0.5) / nBuckets * gRange;
+                break;
+            }
+        }
+        const binaryGlobal = new Uint8Array(w * h);
+        for (let i = 0; i < w * h; i++) binaryGlobal[i] = blurred[i] < globalThresh ? 1 : 0;
 
         const minDim = Math.min(w, h);
         const minArea = Math.pow(minDim * 0.008, 2) * Math.PI;
@@ -155,7 +187,8 @@ const HaloDetector = (() => {
 
         return {
             strictBlobs: extractBlobs(connectedComponents(binaryStrict, w, h), minArea, maxArea, 2.5),
-            gentleBlobs: extractBlobs(connectedComponents(binaryGentle, w, h), minArea, maxArea * 4, 3)
+            gentleBlobs: extractBlobs(connectedComponents(binaryGentle, w, h), minArea, maxArea * 4, 3),
+            globalBlobs: extractBlobs(connectedComponents(binaryGlobal, w, h), minArea, maxArea * 6, 3)
         };
     }
 
@@ -475,37 +508,25 @@ const HaloDetector = (() => {
     }
 
     // ============================================================
-    //  Halo detection — radial intensity profile approach
+    //  Halo detection — combined blob size ratio approach
     // ============================================================
 
     /**
-     * Sample average intensity in a ring around (cx, cy).
+     * Detect halos by comparing the size of blobs detected at a gentle
+     * threshold vs the strict colony size. Halos create larger lighter
+     * zones around colonies, making gentle-threshold blobs significantly
+     * bigger than strict ones.
+     *
+     * Uses both adaptive and global thresholding for gentle blobs,
+     * taking the maximum ratio to handle edge wells where adaptive
+     * thresholding fails due to proximity to the plate frame.
      */
-    function ringMean(gray, w, h, cx, cy, innerR, outerR) {
-        let sum = 0, count = 0;
-        const x0 = Math.max(0, Math.floor(cx - outerR));
-        const x1 = Math.min(w - 1, Math.ceil(cx + outerR));
-        const y0 = Math.max(0, Math.floor(cy - outerR));
-        const y1 = Math.min(h - 1, Math.ceil(cy + outerR));
-        for (let y = y0; y <= y1; y++) {
-            for (let x = x0; x <= x1; x++) {
-                const d = Math.hypot(x - cx, y - cy);
-                if (d >= innerR && d <= outerR) {
-                    sum += gray[y * w + x];
-                    count++;
-                }
-            }
-        }
-        return count > 0 ? sum / count : 0;
-    }
-
-    function analyzeHalos(blurred, w, h, gridResult, strictBlobs, gentleBlobs, options) {
+    function analyzeHalos(blurred, w, h, gridResult, strictBlobs, gentleBlobs, globalBlobs, options) {
         const { sensitivity = 10 } = options;
         const { wells, hSpacing, vSpacing, medianColonyRadius } = gridResult;
 
         const cellSize = Math.min(Math.abs(hSpacing), Math.abs(vSpacing));
         const matchRadius = cellSize * 0.45;
-        const colonyR = medianColonyRadius;
 
         function findNearestBlob(blobList, cx, cy, maxDist) {
             let best = null, bestD = maxDist;
@@ -519,7 +540,7 @@ const HaloDetector = (() => {
         const medianStrictR = median(strictBlobs.map(b => b.radius));
         const rowLabels = 'ABCDEFGH'.split('');
 
-        // First pass: compute radial profile score for every colony
+        // Compute size ratio for each well using both adaptive and global blobs
         const wellData = [];
 
         for (const well of wells) {
@@ -529,71 +550,44 @@ const HaloDetector = (() => {
             const strictMatch = findNearestBlob(strictBlobs, cx, cy, matchRadius);
             const hasColony = strictMatch !== null;
 
-            let profileScore = 0;
-            let peakBrightness = 0;
-            let bgBrightness = 0;
-
-            if (hasColony) {
-                // Sample radial intensity profile in concentric rings
-                // from colony edge out to cell boundary
-                const nRings = 10;
-                const startR = colonyR * 1.1;
-                const endR = cellSize * 0.48;
-                const ringValues = [];
-
-                for (let i = 0; i < nRings; i++) {
-                    const r0 = startR + (endR - startR) * (i / nRings);
-                    const r1 = startR + (endR - startR) * ((i + 1) / nRings);
-                    ringValues.push(ringMean(blurred, w, h, cx, cy, r0, r1));
-                }
-
-                // Colony center brightness
-                const colonyBright = ringMean(blurred, w, h, cx, cy, 0, colonyR * 0.8);
-
-                // Background = outermost 3 rings average
-                bgBrightness = (ringValues[nRings - 1] + ringValues[nRings - 2] + ringValues[nRings - 3]) / 3;
-
-                // Peak brightness in the halo zone (inner half of rings)
-                const haloRings = ringValues.slice(0, Math.ceil(nRings * 0.6));
-                peakBrightness = Math.max(...haloRings);
-
-                // Halo score = how much brighter the peak halo ring is vs background
-                // A colony with a halo has: dark center, BRIGHT halo ring, then dimmer background
-                // A colony without a halo has: dark center, then gradually reaches background
-                profileScore = peakBrightness - bgBrightness;
-            }
-
-            // Also compute the gentle blob size ratio as before
+            // Find matching gentle blobs from both approaches
             const gentleMatch = findNearestBlob(gentleBlobs, cx, cy, matchRadius);
+            const globalMatch = findNearestBlob(globalBlobs, cx, cy, matchRadius);
+
             const gentleR = gentleMatch ? gentleMatch.radius : 0;
-            const sizeRatio = hasColony && medianStrictR > 0 ? gentleR / medianStrictR : 0;
+            const globalR = globalMatch ? globalMatch.radius : 0;
+
+            // Size ratio: use the LARGER of the two gentle blob detections
+            // This handles edge wells where adaptive threshold fails
+            const bestGentleR = Math.max(gentleR, globalR);
+            const sizeRatio = hasColony && medianStrictR > 0 ? bestGentleR / medianStrictR : 0;
 
             wellData.push({
                 well, gridRow, gridCol, cx, cy,
-                hasColony, strictMatch, gentleR,
-                sizeRatio, profileScore, peakBrightness, bgBrightness
+                hasColony, strictMatch,
+                gentleR, globalR, bestGentleR, sizeRatio
             });
         }
 
-        // Compute threshold from profile scores of all colonies
-        // The idea: colonies without halos have profileScore near 0 or slightly negative
-        // Colonies with halos have a clear positive profileScore
-        const colonyScores = wellData.filter(d => d.hasColony).map(d => d.profileScore);
-        colonyScores.sort((a, b) => a - b);
+        // Auto-threshold based on sensitivity slider
+        // Compute the distribution of size ratios for colonies
+        const colonyRatios = wellData.filter(d => d.hasColony).map(d => d.sizeRatio);
+        colonyRatios.sort((a, b) => a - b);
 
-        // Use sensitivity to set the threshold
-        // At sensitivity=10 (default): threshold at roughly the 60th percentile
-        // Higher sensitivity = lower threshold = more detections
-        const percentile = Math.max(0.1, Math.min(0.9, 1.0 - sensitivity / 30));
-        const autoThreshold = colonyScores[Math.floor(colonyScores.length * percentile)] || 2;
-        // Clamp to a minimum of 1.5 to avoid noise
-        const profileThreshold = Math.max(1.5, autoThreshold);
+        // Sensitivity maps to a threshold:
+        // sensitivity 0 (low) -> high threshold (fewer detections, very confident)
+        // sensitivity 15 (medium) -> medium threshold
+        // sensitivity 30 (high) -> low threshold (more detections, more FP risk)
+        // The key threshold is around 1.2 (ratio > 1.2 means gentle blob is 20% bigger)
+        const baseThreshold = 1.20;
+        // Adjust based on sensitivity: range from 1.40 (sens=0) to 1.05 (sens=30)
+        const ratioThreshold = baseThreshold + (15 - sensitivity) * 0.012;
 
         const results = [];
         for (const wd of wellData) {
-            const { well, gridRow, gridCol, cx, cy, hasColony, gentleR, sizeRatio, profileScore } = wd;
+            const { well, gridRow, gridCol, cx, cy, hasColony, bestGentleR, sizeRatio } = wd;
 
-            const hasHalo = hasColony && profileScore > profileThreshold;
+            const hasHalo = hasColony && sizeRatio > ratioThreshold;
 
             results.push({
                 row: gridRow, col: gridCol,
@@ -601,11 +595,11 @@ const HaloDetector = (() => {
                 wellName: `${rowLabels[gridRow] || '?'}${gridCol + 1}`,
                 rowLabel: rowLabels[gridRow] || '?', colNum: gridCol + 1,
                 hasColony, hasHalo,
-                haloScore: hasColony ? Math.round(profileScore * 10) / 10 : 0,
-                gentleRadius: Math.round(gentleR),
+                haloScore: Math.round(sizeRatio * 100) / 100,
+                gentleRadius: Math.round(bestGentleR),
                 strictRadius: wd.strictMatch ? Math.round(wd.strictMatch.radius) : 0,
                 sizeRatio: Math.round(sizeRatio * 100) / 100,
-                profileScore: Math.round(profileScore * 10) / 10
+                profileScore: Math.round(sizeRatio * 100) / 100
             });
         }
 
@@ -614,7 +608,7 @@ const HaloDetector = (() => {
             colonyRadius: Math.round(medianStrictR),
             haloRadius: Math.round(cellSize * 0.45),
             medianStrictR,
-            profileThreshold: Math.round(profileThreshold * 10) / 10
+            profileThreshold: Math.round(ratioThreshold * 100) / 100
         };
     }
 
@@ -629,13 +623,13 @@ const HaloDetector = (() => {
         const gray = toGrayscale(imageData);
         const blurred = gaussianBlur(gray, w, h, 3);
 
-        const { strictBlobs, gentleBlobs } = findBlobs(blurred, w, h);
+        const { strictBlobs, gentleBlobs, globalBlobs } = findBlobs(blurred, w, h);
 
         const numRows = orientation === 'landscape' ? 8 : 12;
         const numCols = orientation === 'landscape' ? 12 : 8;
         const gridResult = fitGrid(strictBlobs, numRows, numCols, w, h);
 
-        const haloResult = analyzeHalos(blurred, w, h, gridResult, strictBlobs, gentleBlobs, options);
+        const haloResult = analyzeHalos(blurred, w, h, gridResult, strictBlobs, gentleBlobs, globalBlobs, options);
 
         return {
             plateRegion: { x: 0, y: 0, w, h },

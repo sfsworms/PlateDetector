@@ -218,7 +218,7 @@
                 `Grid angle: ${angleDeg}deg  |  RANSAC inliers: ${result.inlierCount ?? '?'}/${result.totalBlobs ?? '?'}`,
                 `Strict blobs: ${strictBlobs ? strictBlobs.length : 0}  Gentle blobs: ${gentleBlobs ? gentleBlobs.length : 0}`,
                 `H-spacing: ${result.hSpacing?.toFixed(1)}px  V-spacing: ${result.vSpacing?.toFixed(1)}px`,
-                `Profile threshold: ${result.profileThreshold ?? '?'}`
+                `Size ratio threshold: ${result.profileThreshold ?? '?'}`
             ];
             // Background for readability
             ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
