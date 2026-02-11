@@ -229,6 +229,19 @@
     function buildResults(result, orientation) {
         const { wells } = result;
         const haloWells = wells.filter(w => w.hasHalo);
+        const colonyWells = wells.filter(w => w.hasColony);
+        const noHaloWells = colonyWells.filter(w => !w.hasHalo);
+
+        // Statistics
+        const totalColonies = colonyWells.length;
+        const haloCount = haloWells.length;
+        const noHaloCount = noHaloWells.length;
+        const haloPct = totalColonies > 0 ? (haloCount / totalColonies * 100) : 0;
+
+        document.getElementById('stat-total').textContent = totalColonies;
+        document.getElementById('stat-halo').textContent = haloCount;
+        document.getElementById('stat-nohalo').textContent = noHaloCount;
+        document.getElementById('stat-pct').textContent = haloPct.toFixed(1) + '%';
 
         wellCount.textContent = haloWells.length;
 

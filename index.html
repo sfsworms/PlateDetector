@@ -69,7 +69,27 @@
                     <button id="download-btn" class="btn-secondary">Download Annotated Image</button>
                 </div>
                 <div class="result-panel">
-                    <h2>Active Wells <span id="well-count" class="badge">0</span></h2>
+                    <h2>Statistics</h2>
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-value" id="stat-total">0</div>
+                            <div class="stat-label">Colonies detected</div>
+                        </div>
+                        <div class="stat-card stat-halo">
+                            <div class="stat-value" id="stat-halo">0</div>
+                            <div class="stat-label">With halo</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="stat-nohalo">0</div>
+                            <div class="stat-label">Without halo</div>
+                        </div>
+                        <div class="stat-card stat-pct">
+                            <div class="stat-value" id="stat-pct">0%</div>
+                            <div class="stat-label">Halo rate</div>
+                        </div>
+                    </div>
+
+                    <h2 style="margin-top:1.5rem">Plate Map <span id="well-count" class="badge">0</span></h2>
                     <div id="plate-map-container">
                         <table id="plate-map"></table>
                     </div>
@@ -95,7 +115,7 @@
 
     <canvas id="work-canvas" hidden></canvas>
 
-    <script src="detector.js?v=5"></script>
-    <script src="app.js?v=5"></script>
+    <script src="detector.js?v=6"></script>
+    <script src="app.js?v=6"></script>
 </body>
 </html>
